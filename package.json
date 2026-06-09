@@ -33,7 +33,7 @@
   },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/thirdender/better-auth-dynamodb.git"
   },
   "publishConfig": {
     "access": "public"
