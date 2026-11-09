@@ -78,6 +78,7 @@ Wraps all DynamoDB calls with retry logic for `TransactionConflictException`, `P
 | `client` | `DynamoDBDocumentClient` | required | DynamoDB document client |
 | `tableName` | `string` | required | DynamoDB table name |
 | `maxAttempts` | `number` | `5` | Max retry attempts for transient failures |
+| `ttl` | `string` | — | Optional name of a DynamoDB TTL attribute. When set, the adapter writes a Unix-epoch (seconds) value derived from `expiresAt` to this attribute, in addition to keeping `expiresAt`. The table must have TTL enabled on this attribute. |
 
 ## Performance
 

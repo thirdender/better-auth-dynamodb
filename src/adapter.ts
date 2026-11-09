@@ -32,6 +32,18 @@ interface DynamoDbAdapterConfig {
    * Set to 1 to disable custom retry beyond the SDK's built-in logic.
    */
   maxAttempts?: number;
+  /**
+   * Optional name of a DynamoDB TTL attribute to populate.
+   *
+   * When set, the adapter writes a numeric Unix-epoch (seconds) value to
+   * this attribute on any record that carries an `expiresAt` field, in
+   * addition to keeping `expiresAt` itself. DynamoDB then deletes the item
+   * automatically once the TTL timestamp is reached.
+   *
+   * The table must have TTL enabled on this attribute (e.g. via SST
+   * `ttl: "<attribute>"`). When omitted, no TTL attribute is written.
+   */
+  ttl?: string;
 }
 
 type Where = { field: string; operator: string; value: any };
@@ -60,7 +72,7 @@ export const dynamoDbAdapter = (config: DynamoDbAdapterConfig) =>
       supportsUUIDs: false,
     },
     adapter: ({ transformInput, transformOutput }) => {
-      const { client, tableName, maxAttempts = 5 } = config;
+      const { client, tableName, maxAttempts = 5, ttl } = config;
 
       /**
        * Checks whether a DynamoDB error should be retried.
@@ -102,6 +114,28 @@ export const dynamoDbAdapter = (config: DynamoDbAdapterConfig) =>
       const pk = (model: string, id: string) => `${model}#${id}`;
       const cntPk = (model: string) => `_cnt#${model}`;
       const idxPk = (prefix: string) => `_idx#${prefix}`;
+
+      /**
+       * Convert a Better Auth `expiresAt` value (Date, ISO string, or
+       * epoch number) into a Unix timestamp in seconds for DynamoDB TTL.
+       * Returns `undefined` when the value cannot be parsed.
+       */
+      const toEpochSeconds = (value: unknown): number | undefined => {
+        if (value == null) return undefined;
+        if (value instanceof Date) {
+          const ms = value.getTime();
+          return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+        }
+        if (typeof value === "number") {
+          if (!Number.isFinite(value)) return undefined;
+          return Math.floor(value > 1e12 ? value / 1000 : value);
+        }
+        if (typeof value === "string") {
+          const ms = Date.parse(value);
+          return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+        }
+        return undefined;
+      };
 
       /**
        * Better Auth's internal adapter sometimes omits the operator for
@@ -419,6 +453,12 @@ export const dynamoDbAdapter = (config: DynamoDbAdapterConfig) =>
           const id = transformed.id as string;
           if (!id) throw new Error("id is required");
 
+          // Populate the optional TTL attribute from `expiresAt` when configured.
+          if (ttl && transformed.expiresAt !== undefined) {
+            const epoch = toEpochSeconds(transformed.expiresAt);
+            if (epoch !== undefined) transformed[ttl] = epoch;
+          }
+
           const mainKey = { pk: pk(model, id), sk: pk(model, id) };
           const mainItem = { ...mainKey, GSI1PK: `model_type#${model}`, GSI1SK: pk(model, id), ...transformed };
           const indexItems = buildIndexItems(model, transformed, id);
@@ -475,6 +515,13 @@ export const dynamoDbAdapter = (config: DynamoDbAdapterConfig) =>
           if (!existing) return null;
 
           const transformedUpdate = await transformInput(updateData as Record<string, unknown>, model, "update");
+
+          // Keep the optional TTL attribute in sync when `expiresAt` changes.
+          if (ttl && transformedUpdate.expiresAt !== undefined) {
+            const epoch = toEpochSeconds(transformedUpdate.expiresAt);
+            if (epoch !== undefined) transformedUpdate[ttl] = epoch;
+          }
+
           const expr = buildUpdateExpression(transformedUpdate);
           if (!expr) return transformOutput(existing, model) as Promise<T | null>;
 
